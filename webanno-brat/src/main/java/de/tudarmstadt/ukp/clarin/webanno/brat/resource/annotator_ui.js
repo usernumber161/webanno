@@ -22,75 +22,21 @@
  */
 // -*- Mode: JavaScript; tab-width: 2; indent-tabs-mode: nil; -*-
 // vim:set ft=javascript ts=2 sw=2 sts=2 cindent:
-var makeSelRect = function(rx, ry, rw, rh, col) {
-  selRect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-  selRect.setAttributeNS(null, "width", rw);
-  selRect.setAttributeNS(null, "height", rh);
-  selRect.setAttributeNS(null, "x", rx);
-  selRect.setAttributeNS(null, "y", ry);
-  selRect.setAttributeNS(null, "fill", col == undefined ? "lightblue" : col);
-  return selRect;
-}//370
+var clickTimer = null;
+var CLICK_DELAY = 300;
+var clickCount = 0;
+var reselectedSpan = null;
+var arcDragOrigin = null;
+var editedSpan = null;
+var selRect = null;
+var lastStartRec = null;
+var lastEndRec = null;
+var normDbsByType = {};
 
-var stripNumericSuffix = function(s) {
-  // utility function, originally for stripping numerix suffixes
-  // from arc types (e.g. "Theme2" -> "Theme"). For values
-  // without suffixes (including non-strings), returns given value.
-  if (typeof(s) != "string") {
-    return s; // can't strip
-  }
-  var m = s.match(/^(.*?)(\d*)$/);
-  return m[1]; // always matches
-}//116
-
-var clearSelection = function(obj) {
-  window.getSelection().removeAllRanges();
-  if (selRect != null) {
-    for(var s=0; s != selRect.length; s++) {
-      selRect[s].parentNode.removeChild(selRect[s]);
-    }
-    obj.selRect = null;
-    obj.lastStartRec = null;
-    obj.lastEndRec = null;
-  }
-}//128
-
-var stopArcDrag = function(obj,target) {
-  // BEGIN WEBANNO EXTENSION - #1610 - Improve brat visualization interaction performance
-  // Clear the dragStartAt saved event
-  obj.dragStartedAt = null;
-  // END WEBANNO EXTENSION - #1610 - Improve brat visualization interaction performance
-  if (obj.arcDragOrigin) {
-    if (!target) {
-      target = $('.badTarget');
-    }
-    target.removeClass('badTarget');
-    obj.arcDragOriginGroup.removeClass('highlight');
-    if (target) {
-      target.parent().removeClass('highlight');
-    }
-    if (obj.arcDragArc) {
-      try {
-        obj.svg.remove(arcDragArc);
-      }
-      catch (err) {
-        // Ignore - could be spurious TypeError: null is not an object (evaluating 'a.parentNode.removeChild')
-      }
-      obj.arcDrag = null;
-    }
-    obj.arcDragOrigin = null;
-    if (obj.arcOptions) {
-      $('g[data-from="' + obj.arcOptions.origin + '"][data-to="' + obj.arcOptions.target + '"]').obj.removeClass('reselect');
-    }
-    obj.svgElement.removeClass('reselect');
-  }
-  obj.svgElement.removeClass('unselectable');
-  $('.reselectTarget').removeClass('reselectTarget');
-}//1754
 var AnnotatorUI = (function($, window, undefined) {
   var AnnotatorUI = function(dispatcher, svg) {
     var that = this;
-    var arcDragOrigin = null;
+
     var arcDragOriginBox = null;
     var arcDragOriginGroup = null;
     var arcDragArc = null;
@@ -105,9 +51,8 @@ var AnnotatorUI = (function($, window, undefined) {
     var keymap = null;
     var coll = null;
     var doc = null;
-    var reselectedSpan = null;
     var selectedFragment = null;
-    var editedSpan = null;
+
     var editedFragment = null;
     var repeatingArcTypes = [];
     var spanTypes = null;
@@ -118,9 +63,9 @@ var AnnotatorUI = (function($, window, undefined) {
     var showValidAttributes; // callback function
     var showValidNormalizations; // callback function
     var dragStartedAt = null;
-    var selRect = null;
-    var lastStartRec = null;
-    var lastEndRec = null;
+
+
+
 
     var draggedArcHeight = 30;
     var spanTypesToShowBeforeCollapse = 30;
@@ -149,7 +94,7 @@ var AnnotatorUI = (function($, window, undefined) {
     var normDbUrlByDbName = {};
     var normDbUrlBaseByDbName = {};
     // for normalization: appropriate DBs per type
-    var normDbsByType = {};
+
     // for normalization
     var oldSpanNormIdValue = '';
     var lastNormSearches = [];
@@ -158,86 +103,9 @@ var AnnotatorUI = (function($, window, undefined) {
     var svgElement = $(svg._svg);
     var svgId = svgElement.parent().attr('id');
 
-//Cleared
 
-// WEBANNO EXTENSION BEGIN
-// We do not use the brat forms
-    /*
-          var hideForm = function() {
-            keymap = null;
-            rapidAnnotationDialogVisible = false;
-          };
-    */
-// WEBANNO EXTENSIONE END
-
-
-
-
-
-    var onKeyDown = function(evt) {
-      var code = evt.which;
-
-      if (code === $.ui.keyCode.ESCAPE) {
-        stopArcDrag(that,null);
-        if (reselectedSpan) {
-          $(reselectedSpan.rect).removeClass('reselect');
-          reselectedSpan = null;
-          svgElement.removeClass('reselect');
-        }
-        return;
-      }
-
-      // in rapid annotation mode, prioritize the keys 0..9 for the
-      // ordered choices in the quick annotation dialog.
-      if (Configuration.rapidModeOn && rapidAnnotationDialogVisible &&
-          "0".charCodeAt() <= code && code <= "9".charCodeAt()) {
-        var idx = String.fromCharCode(code);
-        var $input = $('#rapid_span_'+idx);
-        if ($input.length) {
-          $input.click();
-        }
-      }
-
-      if (!keymap) return;
-
-      // disable shortcuts when working with elements that you could
-      // conceivably type in
-      var target = evt.target;
-      var nodeName = target.nodeName.toLowerCase();
-      var nodeType = target.type && target.type.toLowerCase();
-      if (nodeName == 'input' && (nodeType == 'text' || nodeType == 'password')) return;
-      if (nodeName == 'textarea' || nodeName == 'select') return;
-
-      var prefix = '';
-      if (evt.altKey) {
-        prefix = "A-";
-      }
-      if (evt.ctrlKey) {
-        prefix = "C-";
-      }
-      if (evt.shiftKey) {
-        prefix = "S-";
-      }
-      var binding = keymap[prefix + code];
-      if (!binding) binding = keymap[prefix + String.fromCharCode(code)];
-      if (binding) {
-        var boundInput = $('#' + binding)[0];
-        if (boundInput && !boundInput.disabled) {
-          boundInput.click();
-          evt.preventDefault();
-          return false;
-        }
-      }
-    };
-
-// WEBANNO EXTENSION BEGIN - #520 Perform javascript action on click
-    var clickCount = 0;
-    var clickTimer = null;
-    var CLICK_DELAY = 300;
-
-    // Distinguish between double clicks and single clicks . This is relevant when clicking on
-    // annotations. For clicking on text nodes, this is not really relevant.
     var onClick = function(evt){
+
       clickCount++;
 
       var singleClickAction = Configuration.singleClickEdit ?
@@ -316,12 +184,7 @@ var AnnotatorUI = (function($, window, undefined) {
       }
 // WEBANNO EXTENSION END - #406 Sharable link for annotation documents
     }
-// WEBANNO EXTENSION END - #520 Perform javascript action on click
 
-// WEBANNO EXTENSION BEGIN - #863 Allow configuration of default value for "auto-scroll" etc.
-    /*
-          var onDblClick = function(evt) {
-    */
     var editAnnotation = function(evt) {
 // WEBANNO EXTENSION END - #863 Allow configuration of default value for "auto-scroll" etc.
       // must be logged in
@@ -333,9 +196,10 @@ var AnnotatorUI = (function($, window, undefined) {
       var id;
 
       // do we edit an arc?
-      if (id = target.attr('data-arc-role')) {
+      if (id = target.attr('d' +
+          'ata-arc-role')) {
         // TODO
-        clearSelection(that);
+        clearSelection();
         var originSpanId = target.attr('data-arc-origin');
         var targetSpanId = target.attr('data-arc-target');
         var type = target.attr('data-arc-role');
@@ -370,7 +234,7 @@ var AnnotatorUI = (function($, window, undefined) {
 
         // if not an arc, then do we edit a span?
       } else if (id = target.attr('data-span-id')) {
-        clearSelection(that);
+        clearSelection();
         editedSpan = data.spans[id];
         editedFragment = target.attr('data-fragment-id');
         var offsets = [];
@@ -403,30 +267,52 @@ var AnnotatorUI = (function($, window, undefined) {
       */
 // WEBANNO EXTENSION END
     };
-    /*
-          var startArcDrag = function(originId) {
-            clearSelection(that);
 
-            if (!data.spans[originId]) {
-              return;
-            }
+    var fillArcTypesAndDisplayForm = function(evt, originSpanId, originType, targetSpanId, targetType, arcType, arcId) {
 
-            svgElement.addClass('unselectable');
-            svgPosition = svgElement.offset();
-            arcDragOrigin = originId;
-            arcDragArc = svg.path(svg.createPath(), {
-              markerEnd: 'url(#drag_arrow)',
-              'class': 'drag_stroke',
-              fill: 'none',
-            });
-            arcDragOriginGroup = $(data.spans[arcDragOrigin].group);
-            arcDragOriginGroup.addClass('highlight');
-            arcDragOriginBox = Util.realBBox(data.spans[arcDragOrigin].headFragment);
-            arcDragOriginBox.center = arcDragOriginBox.x + arcDragOriginBox.width / 2;
+      if(arcId) {
+        dispatcher.post('ajax', [ {
+          action: 'arcOpenDialog',
+          arcId:arcId,
+          arcType: arcType,
+          originSpanId: originSpanId,
+          originType: originType,
+          targetSpanId: targetSpanId,
+          targetType: targetType
 
-            arcDragJustStarted = true;
-          };
-          */
+        }, 'serverResult']);
+      }
+      else{
+        dispatcher.post('ajax', [ {
+          action: 'arcOpenDialog',
+          originSpanId: originSpanId,
+          originType: originType,
+          targetSpanId: targetSpanId,
+          targetType: targetType
+        }, 'serverResult']);
+
+      }
+    };
+
+    var fillSpanTypesAndDisplayForm = function(evt, offsets, spanText, span, id) {
+
+      if (id) {
+        dispatcher.post('ajax', [ {
+          action: 'spanOpenDialog',
+          offsets: $.toJSON(offsets),
+          id:id,
+          type: span.type,
+          spanText: spanText
+        }, 'serverResult']);
+      }
+      else{
+        dispatcher.post('ajax', [ {
+          action: 'spanOpenDialog',
+          offsets: $.toJSON(offsets),
+          spanText: spanText
+        }, 'serverResult']);
+      }
+    };
 
     var getValidArcTypesForDrag = function(targetId, targetType) {
       var arcType = stripNumericSuffix(arcOptions && arcOptions.type);
@@ -446,6 +332,111 @@ var AnnotatorUI = (function($, window, undefined) {
       }
       return result;
     };
+
+// WEBANNO EXTENSION BEGIN
+// We do not use the brat forms
+    /*
+          var hideForm = function() {
+            keymap = null;
+            rapidAnnotationDialogVisible = false;
+          };
+    */
+// WEBANNO EXTENSIONE END
+
+    var onKeyDown = function(evt) {
+      var code = evt.which;
+
+      if (code === $.ui.keyCode.ESCAPE) {
+        stopArcDrag();
+        if (reselectedSpan) {
+          $(reselectedSpan.rect).removeClass('reselect');
+          reselectedSpan = null;
+          svgElement.removeClass('reselect');
+        }
+        return;
+      }
+
+      // in rapid annotation mode, prioritize the keys 0..9 for the
+      // ordered choices in the quick annotation dialog.
+      if (Configuration.rapidModeOn && rapidAnnotationDialogVisible &&
+          "0".charCodeAt() <= code && code <= "9".charCodeAt()) {
+        var idx = String.fromCharCode(code);
+        var $input = $('#rapid_span_'+idx);
+        if ($input.length) {
+          $input.click();
+        }
+      }
+
+      if (!keymap) return;
+
+      // disable shortcuts when working with elements that you could
+      // conceivably type in
+      var target = evt.target;
+      var nodeName = target.nodeName.toLowerCase();
+      var nodeType = target.type && target.type.toLowerCase();
+      if (nodeName == 'input' && (nodeType == 'text' || nodeType == 'password')) return;
+      if (nodeName == 'textarea' || nodeName == 'select') return;
+
+      var prefix = '';
+      if (evt.altKey) {
+        prefix = "A-";
+      }
+      if (evt.ctrlKey) {
+        prefix = "C-";
+      }
+      if (evt.shiftKey) {
+        prefix = "S-";
+      }
+      var binding = keymap[prefix + code];
+      if (!binding) binding = keymap[prefix + String.fromCharCode(code)];
+      if (binding) {
+        var boundInput = $('#' + binding)[0];
+        if (boundInput && !boundInput.disabled) {
+          boundInput.click();
+          evt.preventDefault();
+          return false;
+        }
+      }
+    };
+
+// WEBANNO EXTENSION BEGIN - #520 Perform javascript action on click
+
+
+    // Distinguish between double clicks and single clicks . This is relevant when clicking on
+    // annotations. For clicking on text nodes, this is not really relevant.
+
+// WEBANNO EXTENSION END - #520 Perform javascript action on click
+
+// WEBANNO EXTENSION BEGIN - #863 Allow configuration of default value for "auto-scroll" etc.
+    /*
+          var onDblClick = function(evt) {
+    */
+
+
+    var startArcDrag = function(originId) {
+      clearSelection();
+
+      if (!data.spans[originId]) {
+        return;
+      }
+
+      svgElement.addClass('unselectable');
+      svgPosition = svgElement.offset();
+      arcDragOrigin = originId;
+      arcDragArc = svg.path(svg.createPath(), {
+        markerEnd: 'url(#drag_arrow)',
+        'class': 'drag_stroke',
+        fill: 'none',
+      });
+      arcDragOriginGroup = $(data.spans[arcDragOrigin].group);
+      arcDragOriginGroup.addClass('highlight');
+      arcDragOriginBox = Util.realBBox(data.spans[arcDragOrigin].headFragment);
+      arcDragOriginBox.center = arcDragOriginBox.x + arcDragOriginBox.width / 2;
+
+      arcDragJustStarted = true;
+    };
+
+
 
     var onMouseDown = function(evt) {
 // BEGIN WEBANNO EXTENSION - #1610 - Improve brat visualization interaction performance
@@ -486,27 +477,7 @@ var AnnotatorUI = (function($, window, undefined) {
           arcOptions = null;
           var target = $(dragStartedAt.target);
           var id = target.attr('data-span-id');
-          // startArcDrag(id);
-          clearSelection(that);
-
-          if (!data.spans[id]) {
-            return;
-          }
-
-          svgElement.addClass('unselectable');
-          svgPosition = svgElement.offset();
-          arcDragOrigin = id;
-          arcDragArc = svg.path(svg.createPath(), {
-            markerEnd: 'url(#drag_arrow)',
-            'class': 'drag_stroke',
-            fill: 'none',
-          });
-          arcDragOriginGroup = $(data.spans[arcDragOrigin].group);
-          arcDragOriginGroup.addClass('highlight');
-          arcDragOriginBox = Util.realBBox(data.spans[arcDragOrigin].headFragment);
-          arcDragOriginBox.center = arcDragOriginBox.x + arcDragOriginBox.width / 2;
-
-          arcDragJustStarted = true;
+          startArcDrag(id);
 
 // BEGIN WEBANNO EXTENSION - #724 - Cross-row selection is jumpy
           // If user starts selecting text, suppress all pointer events on annotations to
@@ -554,7 +525,7 @@ var AnnotatorUI = (function($, window, undefined) {
           }
 // WEBANNO EXTENSION END - #277 - self-referencing arcs for custom layers
         }
-        clearSelection(that);
+        clearSelection();
         var mx = evt.pageX - svgPosition.left;
         var my = evt.pageY - svgPosition.top + 5; // TODO FIXME why +5?!?
         var y = Math.min(arcDragOriginBox.y, my) - draggedArcHeight;
@@ -665,7 +636,7 @@ var AnnotatorUI = (function($, window, undefined) {
             }
 
             // Start has moved
-            flip = !(startRec.x == lastStartRec.x && startRec.y == lastStartRec.y);
+            var flip = !(startRec.x == lastStartRec.x && startRec.y == lastStartRec.y);
             // If the height of the start or end changed we need to check whether
             // to remove multi line highlights no longer needed if the user went back towards their start line
             // and whether to create new ones if we moved to a newline
@@ -687,7 +658,7 @@ var AnnotatorUI = (function($, window, undefined) {
               // TODO put this in loops above, for efficiency the array slicing could be done separate still in single call
               var trunc = false;
               if (ss < selRect.length) {
-                for (s2 = 0; s2 != ss; s2++) {
+                for (var s2 = 0; s2 != ss; s2++) {
                   selRect[s2].parentNode.removeChild(selRect[s2]);
                   es--;
                   trunc = true;
@@ -704,9 +675,9 @@ var AnnotatorUI = (function($, window, undefined) {
 
               // If we have truncated the highlights we need to readjust the last one
               if (trunc) {
-                activeSelRect = flip ? selRect[0] : selRect[selRect.length - 1];
+                var activeSelRect = flip ? selRect[0] : selRect[selRect.length - 1];
                 if (flip) {
-                  rw = 0;
+                  var rw = 0;
                   if (startRec.y == endRec.y) {
                     rw = (endRec.x + endRec.width) - startRec.x;
                   } else {
@@ -718,7 +689,7 @@ var AnnotatorUI = (function($, window, undefined) {
                   activeSelRect.setAttributeNS(null, "y", startRec.y);
                   activeSelRect.setAttributeNS(null, "width", rw);
                 } else {
-                  rw = (endRec.x + endRec.width) - parseFloat(activeSelRect.getAttributeNS(null, "x"));
+                  var rw = (endRec.x + endRec.width) - parseFloat(activeSelRect.getAttributeNS(null, "x"));
                   activeSelRect.setAttributeNS(null, "width", rw);
                 }
               } else {
@@ -738,10 +709,10 @@ var AnnotatorUI = (function($, window, undefined) {
                       (startBox.x + startBox.width)
                       - parseFloat(lastSel.getAttributeNS(null, "x")));
                 }
-                rx = 0;
-                ry = 0;
-                rw = 0;
-                rh = 0;
+                var rx = 0;
+                var ry = 0;
+                var rw = 0;
+                var rh = 0;
                 if (flip) {
                   rx = startRec.x;
                   ry = startRec.y;
@@ -765,10 +736,10 @@ var AnnotatorUI = (function($, window, undefined) {
               }
             } else {
               // The user simply moved left or right along the same line so just adjust the current highlight
-              activeSelRect = flip ? selRect[0] : selRect[selRect.length - 1];
+              var activeSelRect = flip ? selRect[0] : selRect[selRect.length - 1];
               // If the start moved shift the highlight and adjust width
               if (flip) {
-                rw = (parseFloat(activeSelRect.getAttributeNS(null, "x"))
+                var rw = (parseFloat(activeSelRect.getAttributeNS(null, "x"))
                     + parseFloat(activeSelRect.getAttributeNS(null, "width")))
                     - startRec.x;
                 activeSelRect.setAttributeNS(null, "x", startRec.x);
@@ -776,7 +747,7 @@ var AnnotatorUI = (function($, window, undefined) {
                 activeSelRect.setAttributeNS(null, "width", rw);
               } else {
                 // If the end moved then simple change the width
-                rw = (endRec.x + endRec.width)
+                var rw = (endRec.x + endRec.width)
                     - parseFloat(activeSelRect.getAttributeNS(null, "x"));
                 activeSelRect.setAttributeNS(null, "width", rw);
               }
@@ -788,49 +759,43 @@ var AnnotatorUI = (function($, window, undefined) {
       }
       arcDragJustStarted = false;
     };
-// below code is not used
-    /*    var adjustToCursor = function(evt, element, centerX, centerY) {
-          var screenHeight = $(window).height() - 8; // TODO HACK - no idea why -8 is needed
-          var screenWidth = $(window).width() - 8;
-          var elementHeight = element.height();
-          var elementWidth = element.width();
-          var cssSettings = {};
-          var eLeft;
-          var eTop;
-          if (centerX) {
-              eLeft = evt.clientX - elementWidth/2;
-          } else {
-              eLeft = evt.clientX;
-          }
-          if (centerY) {
-              eTop = evt.clientY - elementHeight/2;
-          } else {
-              eTop = evt.clientY;
-          }
-          // Try to make sure the element doesn't go off-screen.
-          // If this isn't possible (the element is larger than the screen),
-          // alight top-left corner of screen and dialog as a compromise.
-          if (screenWidth > elementWidth) {
-              eLeft = Math.min(Math.max(eLeft,0), screenWidth - elementWidth);
-          } else {
-              eLeft = 0;
-          }
-          if (screenHeight > elementHeight) {
-              eTop  = Math.min(Math.max(eTop,0), screenHeight - elementHeight);
-          } else {
-              eTop  = 0;
-          }
-          element.css({ top: eTop, left: eLeft });
-        };
-  */
-//below code is used only once so directly written the code in that location
-    /*
-          var updateCheckbox = function($input) {
-            var $widget = $input.button('widget');
-            var $textspan = $widget.find('.ui-button-text');
-            $textspan.html(($input[0].checked ? '&#x2611; ' : '&#x2610; ') + $widget.attr('data-bare'));
-          };
-    */
+
+    var adjustToCursor = function(evt, element, centerX, centerY) {
+      var screenHeight = $(window).height() - 8; // TODO HACK - no idea why -8 is needed
+      var screenWidth = $(window).width() - 8;
+      var elementHeight = element.height();
+      var elementWidth = element.width();
+      var cssSettings = {};
+      var eLeft;
+      var eTop;
+      if (centerX) {
+        eLeft = evt.clientX - elementWidth/2;
+      } else {
+        eLeft = evt.clientX;
+      }
+      if (centerY) {
+        eTop = evt.clientY - elementHeight/2;
+      } else {
+        eTop = evt.clientY;
+      }
+      // Try to make sure the element doesn't go off-screen.
+      // If this isn't possible (the element is larger than the screen),
+      // alight top-left corner of screen and dialog as a compromise.
+      if (screenWidth > elementWidth) {
+        eLeft = Math.min(Math.max(eLeft,0), screenWidth - elementWidth);
+      } else {
+        eLeft = 0;
+      }
+      if (screenHeight > elementHeight) {
+        eTop  = Math.min(Math.max(eTop,0), screenHeight - elementHeight);
+      } else {
+        eTop  = 0;
+      }
+      element.css({ top: eTop, left: eLeft });
+    };
+
+  
+
 // WEBANNO EXTENSION BEGIN
     /*
           var fillSpanTypesAndDisplayForm = function(evt, spanText, span) {
@@ -1148,25 +1113,7 @@ var AnnotatorUI = (function($, window, undefined) {
           };
     */
 
-    var fillSpanTypesAndDisplayForm = function(evt, offsets, spanText, span, id) {
 
-      if (id) {
-        dispatcher.post('ajax', [ {
-          action: 'spanOpenDialog',
-          offsets: $.toJSON(offsets),
-          id:id,
-          type: span.type,
-          spanText: spanText
-        }, 'serverResult']);
-      }
-      else{
-        dispatcher.post('ajax', [ {
-          action: 'spanOpenDialog',
-          offsets: $.toJSON(offsets),
-          spanText: spanText
-        }, 'serverResult']);
-      }
-    };
 // WEBANNO EXTENSION END
 
     var submitReselect = function() {
@@ -1718,31 +1665,6 @@ var AnnotatorUI = (function($, window, undefined) {
     */
 
 // We send a request to the backend to open the dialog
-    var fillArcTypesAndDisplayForm = function(evt, originSpanId, originType, targetSpanId, targetType, arcType, arcId) {
-
-      if(arcId) {
-        dispatcher.post('ajax', [ {
-          action: 'arcOpenDialog',
-          arcId:arcId,
-          arcType: arcType,
-          originSpanId: originSpanId,
-          originType: originType,
-          targetSpanId: targetSpanId,
-          targetType: targetType
-
-        }, 'serverResult']);
-      }
-      else{
-        dispatcher.post('ajax', [ {
-          action: 'arcOpenDialog',
-          originSpanId: originSpanId,
-          originType: originType,
-          targetSpanId: targetSpanId,
-          targetType: targetType
-        }, 'serverResult']);
-
-      }
-    };
 // WEBANNO EXTENSION END
 
 // WEBANNO EXTENSION BEGIN
@@ -1807,7 +1729,38 @@ var AnnotatorUI = (function($, window, undefined) {
     */
 // WEBANNO EXTENSION END
 
-
+    var stopArcDrag = function(target) {
+// BEGIN WEBANNO EXTENSION - #1610 - Improve brat visualization interaction performance
+      // Clear the dragStartAt saved event
+      dragStartedAt = null;
+// END WEBANNO EXTENSION - #1610 - Improve brat visualization interaction performance
+      if (arcDragOrigin) {
+        if (!target) {
+          target = $('.badTarget');
+        }
+        target.removeClass('badTarget');
+        arcDragOriginGroup.removeClass('highlight');
+        if (target) {
+          target.parent().removeClass('highlight');
+        }
+        if (arcDragArc) {
+          try {
+            svg.remove(arcDragArc);
+          }
+          catch (err) {
+            // Ignore - could be spurious TypeError: null is not an object (evaluating 'a.parentNode.removeChild')
+          }
+          arcDrag = null;
+        }
+        arcDragOrigin = null;
+        if (arcOptions) {
+          $('g[data-from="' + arcOptions.origin + '"][data-to="' + arcOptions.target + '"]').removeClass('reselect');
+        }
+        svgElement.removeClass('reselect');
+      }
+      svgElement.removeClass('unselectable');
+      $('.reselectTarget').removeClass('reselectTarget');
+    };
 
     var onMouseUp = function(evt) {
       if (that.user === null) return;
@@ -1836,8 +1789,8 @@ var AnnotatorUI = (function($, window, undefined) {
       if (!(targetSpanId !== undefined || targetChunkId !== undefined) || targetArcRole !== undefined) {
 // END WEBANNO EXTENSION - #1579 - Send event when action-clicking on a relation
         // misclick
-        clearSelection(that);
-        stopArcDrag(that,target);
+        clearSelection();
+        stopArcDrag(target);
         return;
       }
 
@@ -1845,7 +1798,7 @@ var AnnotatorUI = (function($, window, undefined) {
       if (arcDragOrigin) {
         var origin = arcDragOrigin;
         var targetValid = target.hasClass('reselectTarget');
-        stopArcDrag(that,target);
+        stopArcDrag(target);
 // WEBANNO EXTENSION BEGIN - #277 - self-referencing arcs for custom layers
         if ((id = target.attr('data-span-id')) && targetValid && (evt.shiftKey || origin != id)) {
 //          if ((id = target.attr('data-span-id')) && origin != id && targetValid) {
@@ -1952,8 +1905,8 @@ var AnnotatorUI = (function($, window, undefined) {
 
         // If neither approach worked, give up - the user didn't click on selectable text.
         if (anchorNode == null || !anchorNode[0] || focusNode == null || !focusNode[0]) {
-          clearSelection(that);
-          stopArcDrag(that,target);
+          clearSelection();
+          stopArcDrag(target);
           return;
         }
 
@@ -1982,8 +1935,8 @@ var AnnotatorUI = (function($, window, undefined) {
           }
           else {
             // misclick
-            clearSelection(that);
-            stopArcDrag(that,target);
+            clearSelection();
+            stopArcDrag(target);
             return;
           }
         }
@@ -2100,7 +2053,7 @@ var AnnotatorUI = (function($, window, undefined) {
           } else {
             // normal span select in rapid annotation mode: call
             // server for span type candidates
-            spanText = data.text.substring(selectedFrom, selectedTo);
+            var spanText = data.text.substring(selectedFrom, selectedTo);
             // TODO: we're currently storing the event to position the
             // span form using adjustToCursor() (which takes an event),
             // but this is clumsy and suboptimal (user may have scrolled
@@ -2148,21 +2101,7 @@ var AnnotatorUI = (function($, window, undefined) {
     */
 // WEBANNO EXTENSION END
 
-    var toggleCollapsible = function($el, state) {
-      var opening = state !== undefined ? state : !$el.hasClass('open');
-      var $collapsible = $el.parent().find('.collapsible:first');
-      if (opening) {
-        $collapsible.addClass('open');
-        $el.addClass('open');
-      } else {
-        $collapsible.removeClass('open');
-        $el.removeClass('open');
-      }
-    };
 
-    var collapseHandler = function(evt) {
-      toggleCollapsible($(evt.target));
-    }
 
 // WEBANNO EXTENSION BEGIN
 // We do not use the brat forms
@@ -2236,7 +2175,7 @@ var AnnotatorUI = (function($, window, undefined) {
           $parent.append($div);
           if (type.hotkey) {
             spanKeymap[type.hotkey] = 'span_' + type.type;
-            name = $label.html();
+            var name = $label.html();
             var replace = true;
             name = name.replace(new RegExp("(&[^;]*?)?(" + type.hotkey + ")", 'gi'),
                 function(all, entity, letter) {
@@ -2270,7 +2209,7 @@ var AnnotatorUI = (function($, window, undefined) {
           $top.append($input);
         } else if (attr.bool) {
           var escapedName = Util.escapeQuotes(attr.name);
-          $input = $('<input type="checkbox" id="'+attrId+
+          var $input = $('<input type="checkbox" id="'+attrId+
               '" value="' + escapedType +
               '" category="' + category + '"/>');
           var $label = $('<label class="attribute_type_label" for="'+attrId+
@@ -2344,11 +2283,7 @@ var AnnotatorUI = (function($, window, undefined) {
     var onBooleanAttrChange = function(evt) {
       var attrCategory = evt.target.getAttribute('category');
       setSpanTypeSelectability(attrCategory);
-      // updateCheckbox($(evt.target));
-      var $widget = $(evt.target).button('widget');
-      var $textspan = $widget.find('.ui-button-text');
-      $textspan.html(($(evt.target)[0].checked ? '&#x2611; ' : '&#x2610; ') + $widget.attr('data-bare'));
-
+      updateCheckbox($(evt.target));
     };
 
     var rememberSpanSettings = function(response) {
@@ -2450,23 +2385,7 @@ var AnnotatorUI = (function($, window, undefined) {
 
     // recursively traverses type hierarchy (entity_types or
     // event_types) and stores normalizations in normDbsByType.
-    var rememberNormDbsForType = function(types) {
-      if (!types) return;
 
-      $.each(types, function(typeNo, type) {
-        if (type === null) {
-          // spacer, no-op
-        } else {
-          normDbsByType[type.type] = type.normalizations || [];
-// WEBANNO EXTENSION BEGIN
-// Avoid exception when no children are set
-          if (type.children && type.children.length) {
-// WEBANNO EXTENSION END
-            rememberNormDbsForType(type.children);
-          }
-        }
-      });
-    };
 
     var setupNormalizationUI = function(response) {
       var norm_resources = response.normalization_config || [];
@@ -2499,9 +2418,6 @@ var AnnotatorUI = (function($, window, undefined) {
     }
 
     // hides the reference link in the normalization UI
-    var hideNormalizationRefLink = function() {
-      $('#span_norm_ref_link').hide();
-    }
 
     // updates the reference link in the normalization UI according
     // to the current value of the normalization DB and ID.
@@ -2616,11 +2532,7 @@ var AnnotatorUI = (function($, window, undefined) {
           eventAttributeTypes);
     };
 
-    var gotCurrent = function(_coll, _doc, _args) {
-      coll = _coll;
-      doc = _doc;
-      args = _args;
-    };
+
 
     var undoStack = [];
     var edited = function(response) {
@@ -2647,7 +2559,7 @@ var AnnotatorUI = (function($, window, undefined) {
         } else {
           args.edited = response.edited;
         }
-        sourceData = response.annotations;
+        var sourceData = response.annotations;
         sourceData.document = doc;
         sourceData.collection = coll;
         // this "prevent" is to protect against reloading (from the
@@ -3051,9 +2963,6 @@ var AnnotatorUI = (function($, window, undefined) {
     */
 // WEBANNO EXTENSION END
 
-    var preventDefault = function(evt) {
-      evt.preventDefault();
-    }
 
 // WEBANNO EXTENSION BEGIN - #1388 Support context menu
     var contextMenu = function(evt) {
@@ -3063,7 +2972,7 @@ var AnnotatorUI = (function($, window, undefined) {
         return;
       }
 
-      stopArcDrag(that,null);
+      stopArcDrag();
 
       var target = $(evt.target);
       var id;
@@ -3099,10 +3008,7 @@ var AnnotatorUI = (function($, window, undefined) {
     // overlay to prevent interaction
     $waiter.parent().css('opacity', '0');
 
-    var isReloadOkay = function() {
-      // do not reload while the user is in the middle of editing
-      return arcDragOrigin == null && reselectedSpan == null;
-    };
+
 
     var userReceived = function(_user) {
       that.user = _user;
@@ -3171,3 +3077,94 @@ var AnnotatorUI = (function($, window, undefined) {
 
   return AnnotatorUI;
 })(jQuery, window);
+var stripNumericSuffix = function(s) {
+  // utility function, originally for stripping numerix suffixes
+  // from arc types (e.g. "Theme2" -> "Theme"). For values
+  // without suffixes (including non-strings), returns given value.
+  if (typeof(s) != "string") {
+    return s; // can't strip
+  }
+  var m = s.match(/^(.*?)(\d*)$/);
+  return m[1]; // always matches
+}
+
+var makeSelRect = function(rx, ry, rw, rh, col) {
+  var selRect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+  selRect.setAttributeNS(null, "width", rw);
+  selRect.setAttributeNS(null, "height", rh);
+  selRect.setAttributeNS(null, "x", rx);
+  selRect.setAttributeNS(null, "y", ry);
+  selRect.setAttributeNS(null, "fill", col == undefined ? "lightblue" : col);
+  return selRect;
+};
+
+var clearSelection = function() {
+  window.getSelection().removeAllRanges();
+  if (selRect != null) {
+    for(var s=0; s != selRect.length; s++) {
+      selRect[s].parentNode.removeChild(selRect[s]);
+    }
+    selRect = null;
+    lastStartRec = null;
+    lastEndRec = null;
+  }
+};
+
+var preventDefault = function(evt) {
+  evt.preventDefault();
+}
+
+var hideNormalizationRefLink = function() {
+  $('#span_norm_ref_link').hide();
+}
+
+var isReloadOkay = function() {
+  // do not reload while the user is in the middle of editing
+  return arcDragOrigin == null && reselectedSpan == null;
+};
+
+var toggleCollapsible = function($el, state) {
+  var opening = state !== undefined ? state : !$el.hasClass('open');
+  var $collapsible = $el.parent().find('.collapsible:first');
+  if (opening) {
+    $collapsible.addClass('open');
+    $el.addClass('open');
+  } else {
+    $collapsible.removeClass('open');
+    $el.removeClass('open');
+  }
+};
+
+var collapseHandler = function(evt) {
+  toggleCollapsible($(evt.target));
+}
+
+var gotCurrent = function(_coll, _doc, _args) {
+  coll = _coll;
+  doc = _doc;
+  args = _args;
+};
+
+var rememberNormDbsForType = function(types) {
+  if (!types) return;
+
+  $.each(types, function(typeNo, type) {
+    if (type === null) {
+      // spacer, no-op
+    } else {
+      normDbsByType[type.type] = type.normalizations || [];
+// WEBANNO EXTENSION BEGIN
+// Avoid exception when no children are set
+      if (type.children && type.children.length) {
+// WEBANNO EXTENSION END
+        rememberNormDbsForType(type.children);
+      }
+    }
+  });
+};
+
+var updateCheckbox = function($input) {
+  var $widget = $input.button('widget');
+  var $textspan = $widget.find('.ui-button-text');
+  $textspan.html(($input[0].checked ? '&#x2611; ' : '&#x2610; ') + $widget.attr('data-bare'));
+};
