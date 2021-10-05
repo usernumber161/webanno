@@ -760,7 +760,7 @@ var AnnotatorUI = (function($, window, undefined) {
       arcDragJustStarted = false;
     };
 
-    var adjustToCursor = function(evt, element, centerX, centerY) {
+    /*var adjustToCursor = function(evt, element, centerX, centerY) {
       var screenHeight = $(window).height() - 8; // TODO HACK - no idea why -8 is needed
       var screenWidth = $(window).width() - 8;
       var elementHeight = element.height();
@@ -792,9 +792,8 @@ var AnnotatorUI = (function($, window, undefined) {
         eTop  = 0;
       }
       element.css({ top: eTop, left: eLeft });
-    };
+    };*/
 
-  
 
 // WEBANNO EXTENSION BEGIN
     /*
@@ -3015,15 +3014,17 @@ var AnnotatorUI = (function($, window, undefined) {
     }
 
     var setAnnotationSpeed = function(speed) {
-      if (speed == 1) {
-        Configuration.confirmModeOn = true;
-      } else {
-        Configuration.confirmModeOn = false;
-      }
-      if (speed == 3) {
-        Configuration.rapidModeOn = true;
-      } else {
-        Configuration.rapidModeOn = false;
+      switch (speed) {
+        case 1:
+          Configuration.confirmModeOn = true;
+          break;
+        case 3:
+          Configuration.rapidModeOn = true;
+          break;
+        default:
+          Configuration.confirmModeOn = false;
+          Configuration.rapidModeOn = false;
+          break;
       }
       dispatcher.post('configurationChanged');
     };
@@ -3140,9 +3141,9 @@ var collapseHandler = function(evt) {
 }
 
 var gotCurrent = function(_coll, _doc, _args) {
-  coll = _coll;
-  doc = _doc;
-  args = _args;
+  let coll = _coll;
+  let doc = _doc;
+  let args = _args;
 };
 
 var rememberNormDbsForType = function(types) {
